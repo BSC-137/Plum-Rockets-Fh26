@@ -4,9 +4,9 @@ Plum Rockets is a high-performance, spatiotemporal engine built to version-contr
 
 ## The Founders
 
-*   **Bharat** — Systems Architect & Lead Engine Engineer (Rust)
-*   **Shree** — Fullstack Lead & Integration
-*   **Hana** — UX/UI & Spatial Visualization (Three.js/R3F)
+* [**Bharat**](https://github.com/BSC-137)
+* [**Shree**](https://github.com/shreejitmurthy)
+* [**Hana**](https://github.com/jyonkii)
 
 ## Technical Sophistication (Engine Specs)
 
