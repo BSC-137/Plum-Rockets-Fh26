@@ -1,85 +1,81 @@
 # Plum Rockets: 4D World Model Engine
 
-Plum Rockets is a high-performance, spatiotemporal engine built to version-control the physical world. Unlike standard 3D mapping, Plum Rockets implements Object Permanence and Structural Intelligence at the hardware level, enabling autonomous systems to distinguish between static infrastructure and entropic chaos.
+Plum Rockets is a high-performance, spatiotemporal engine built to version-control the physical world. It implements Object Permanence and Structural Intelligence at the hardware level, enabling systems to distinguish between static infrastructure and entropic chaos.
 
 ## The Founders
 
-*   Bharat — Systems Architect & Lead Engine Engineer (Rust)
-*   Shree — Fullstack Lead & Integration
-*   Hana — UX/UI & Spatial Visualization (Three.js/R3F)
+*   **Bharat** — Systems Architect & Lead Engine Engineer (Rust)
+*   **Shree** — Fullstack Lead & Integration
+*   **Hana** — UX/UI & Spatial Visualization (Three.js/R3F)
 
-## Technical Sophistication (What we’ve built)
+## Technical Sophistication (Engine Specs)
 
-We have moved beyond a simple REST API to a dedicated Physical AI Engine. Our current backend architecture includes:
+We have moved beyond a simple REST API to a dedicated Physical AI Engine. Our architecture is designed for **Zero-Latency Spatial Awareness**:
 
-*   **Lock-Free Spatial Hashing:** Utilizes a u64 bit-packed key `[z(16)|y(16)|x(16)]` for $O(1)$ lookups. Powered by DashMap for multi-threaded ingestion without global lock contention.
-*   **SIMD-Accelerated Ingestion:** Leverages the `glam` math crate to perform Single Instruction, Multiple Data (SIMD) operations, allowing the engine to process millions of points per second with sub-millisecond latency.
-*   **Temporal Occupancy Buffers:** Each voxel stores its own history in a 32-bit bitmask. This allows the engine to "remember" the last 32 frames of reality at zero heap cost.
-*   **Shannon Entropy Analysis:** Real-time calculation of spatial uncertainty using $H = -(p \log_2 p + (1-p) \log_2 (1-p))$.
-*   **The Aging Loop:** A self-cleaning mechanism that detects the absence of objects, allowing the world model to "forget" moving ghosts and update structural integrity scores dynamically.
+### 1. Backend: The Rust Brain
+
+*   **Lock-Free Spatial Hashing:** Utilizes a u64 bit-packed key for $O(1)$ lookups. Powered by `DashMap` and `AtomicU64` sequences to eliminate global lock contention during multi-threaded ingestion.
+*   **Sparse Aging Loop:** Unlike traditional voxel engines that scan the whole world, Plum Rockets maintains an **Active Set** of voxels. It only processes "living" data, moving complexity from $O(\text{Total Voxels})$ to $O(\text{Active Voxels})$.
+*   **Shannon Entropy Analysis:** Real-time uncertainty calculation per voxel using:
+    $$H(V) = -\sum p_i \log p_i$$
+*   **WSL2 Optimized:** Backend binds to `0.0.0.0` to ensure seamless signal passthrough from Linux subsystems to Windows browsers and MacOS systems.
+
+### 2. Frontend: The Predictive Lens
+
+*   **React 19 + TypeScript:** Full type-safety contract between Rust structs and the UI.
+*   **Zustand State Mirror:** Implements a high-frequency state-syncing store that mirrors the backend's world state without triggering infinite re-render loops.
+*   **$O(1)$ Rendering (R3F):** Uses `InstancedMesh` via React-Three-Fiber. This offloads all voxel positioning and coloring to the GPU, allowing 60FPS visualization of high-density LiDAR streams.
+*   **Adaptive HUD:** Real-time telemetry displaying the World Clock (`sequence_id`), Signal Integrity, and Voxel Memory.
 
 ## Installation & Setup
 
 ### 1. Prerequisites
 
-You need the Rust toolchain and `jq` for data inspection.
-
-```bash
-# Install Rust
-curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
-
-# Install JQ (for terminal visualization)
-sudo apt update && sudo apt install jq -y
-```
+*   **Rust Toolchain:** `curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh`
+*   **Node.js (v20+):** `npm install`
+*   **Terminal Visualizer:** `sudo apt install jq -y`
 
 ### 2. Running the Engine
 
+#### Terminal A: The Backend
 ```bash
 cd plum-engine/backend
 cargo run
+# Port: 3000 | Address: 0.0.0.0
 ```
 
-*Note: During development, use `cargo watch -x check` for instant logic validation without the heavy compilation tax.*
-
-## Validation: What the Data Means
-
-When you run `curl -s http://localhost:3000/api/ping | jq`, you are looking at the "Brain's" vitals:
-
-```json
-{
-  "ok": true,
-  "service": "plum-rockets-4d-engine",
-  "sequence_id": 0,
-  "voxel_count": 10
-}
-```
-
-*   **ok: true:** The Axum server is alive and the lock-free DashMap is initialized.
-*   **sequence_id:** This is the World Clock. Every time a sensor (LiDAR) sends data, the clock ticks. It allows the frontend to request only the changes since the last time it looked.
-*   **voxel_count:** This is the Spatial Memory. The "10" voxels you see are the seeded ground layer we created to ensure the engine is ready to receive data.
-
-## Testing the 4D Logic
-
-To prove the engine is "thinking," use these commands in a separate terminal:
-
-### 1. Advance the World Clock
-
+#### Terminal B: The Frontend
 ```bash
-curl -s -X POST http://localhost:3000/api/dev/tick
+cd plum-engine/frontend
+npm install
+npm run dev
+# Port: 5173 | Dependencies: three, @react-three/fiber, zustand, @react-three/drei
 ```
 
-### 2. Ingest Raw Point Clouds
+## Validation: The "Pulse" Test
 
+### 1. Health Check
+```bash
+curl -s http://localhost:3000/api/ping | jq
+```
+*Confirms Axum is alive and the DashMap is seeded.*
+
+### 2. Advance the World Clock (Simulation)
+```bash
+curl -X POST http://localhost:3000/api/world/tick
+```
+*Watch the `SEQ_ID` on the HUD jump. If the tick triggers an anomaly, a cube will flash **Anomaly Orange (#FF3E00)**.*
+
+### 3. Ingest Raw LiDAR Points
 ```bash
 curl -X POST http://localhost:3000/api/world/ingest \
      -H "Content-Type: application/json" \
-     -d '{"points": [{"x": 1.5, "y": 2.0, "z": 0.5}]}'
+     -d '{"points": [{"x": 1.0, "y": 2.0, "z": 0.0}]}'
 ```
+*The new point will instantly appear in the 3D grid.*
 
-### 3. Inspect Spatiotemporal Deltas
+## Visual Language
 
-```bash
-curl -s "http://localhost:3000/api/world/delta?since=0" | jq
-```
-
-This returns only the voxels that have changed, including their entropy and anomaly flags.
+*   **Matrix Green (#00FF41):** Stable, high-probability infrastructure.
+*   **Anomaly Orange (#FF3E00):** Predictive failure / high-entropy event.
+*   **Deep Obsidian (#111111):** Ghosted state (Object Permanence memory).
