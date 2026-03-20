@@ -1,4 +1,5 @@
 use std::collections::{HashSet, VecDeque};
+use std::sync::atomic::{AtomicU64, Ordering};
 use glam::Vec3;
 use parking_lot::RwLock;
 
@@ -8,16 +9,12 @@ use crate::{
 };
 
 // ---------------------------------------------------------------------------
-// Constants
+// Constants & Types
 // ---------------------------------------------------------------------------
 
-const MAX_HISTORY: usize = 20;
-const INITIAL_CAPACITY: usize = 4096;
+const MAX_HISTORY: usize = 50;
+const INITIAL_CAPACITY: usize = 16384;
 const ANOMALY_THRESHOLD: f32 = 0.4;
-
-// ---------------------------------------------------------------------------
-// Snapshot
-// ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone)]
 pub struct Snapshot {
@@ -31,7 +28,8 @@ pub struct Snapshot {
 // ---------------------------------------------------------------------------
 
 pub struct WorldModel {
-    sequence_id: u64,
+    /// Atomic sequence allows &self ingestion (no global write lock needed)
+    sequence_id: AtomicU64,
     voxels: SpatialHash,
     history: RwLock<VecDeque<Snapshot>>,
 }
@@ -39,7 +37,7 @@ pub struct WorldModel {
 impl WorldModel {
     pub fn new_seeded() -> Self {
         let world = Self {
-            sequence_id: 0,
+            sequence_id: AtomicU64::new(0),
             voxels: SpatialHash::with_capacity(INITIAL_CAPACITY),
             history: RwLock::new(VecDeque::with_capacity(MAX_HISTORY)),
         };
@@ -53,7 +51,7 @@ impl WorldModel {
 
         for &(x, y, z) in seed_coords {
             let key = spatial_key(x, y, z);
-            world.voxels.insert_by_key(key, Voxel::new(x, y, z, true, 0));
+            world.voxels.insert_and_activate(key, Voxel::new(x, y, z, true, 0));
         }
 
         world.push_snapshot();
@@ -61,20 +59,25 @@ impl WorldModel {
     }
 
     #[inline]
-    pub fn sequence_id(&self) -> u64 { self.sequence_id }
+    pub fn sequence_id(&self) -> u64 {
+        self.sequence_id.load(Ordering::Relaxed)
+    }
 
     #[inline]
-    pub fn voxel_count(&self) -> usize { self.voxels.len() }
+    pub fn voxel_count(&self) -> usize {
+        self.voxels.len()
+    }
 
     pub fn all_voxels(&self) -> Vec<Voxel> {
         let mut v = self.voxels.collect_all();
+        // Sorting is expensive; only call this when a full UI refresh is needed
         v.sort_unstable_by_key(|v| (v.z, v.y, v.x));
         v
     }
 
     pub fn latest_snapshot(&self) -> Snapshot {
         self.history.read().back().cloned().unwrap_or_else(|| Snapshot {
-            sequence_id: self.sequence_id,
+            sequence_id: self.sequence_id(),
             structural_integrity: self.structural_integrity_score(),
             voxels: self.all_voxels(),
         })
@@ -91,42 +94,63 @@ impl WorldModel {
     }
 
     pub fn structural_integrity_score(&self) -> f64 {
-        let all = self.voxels.collect_all();
-        if all.is_empty() { return 1.0; }
-        let mean_entropy: f64 = all.iter().map(|v| v.entropy as f64).sum::<f64>() / all.len() as f64;
-        (1.0 - mean_entropy).clamp(0.0, 1.0)
+        let all = self.voxels.inner.iter();
+        if all.size_hint().0 == 0 { return 1.0; }
+        
+        let mut total_entropy = 0.0;
+        let mut count = 0;
+        for entry in all {
+            total_entropy += entry.value().entropy as f64;
+            count += 1;
+        }
+        
+        if count == 0 { return 1.0; }
+        (1.0 - (total_entropy / count as f64)).clamp(0.0, 1.0)
     }
 
-    pub fn ingest_point_cloud(&mut self, points: Vec<Vec3>) {
-        self.sequence_id += 1;
-        let seq = self.sequence_id;
-        let mut touched_keys = HashSet::new();
+    /// Primary Ingestion Loop: Processes raw points and updates the 4D model.
+    /// Now uses a Sparse Active Set to avoid O(N) full-table scans.
+    pub fn ingest_point_cloud(&self, points: Vec<Vec3>) {
+        let seq = self.sequence_id.fetch_add(1, Ordering::SeqCst) + 1;
+        let mut touched_keys = HashSet::with_capacity(points.len());
 
+        // 1. Mark incoming points as occupied
         for point in points {
             let floored = point.floor();
-            let x = floored.x as i32;
-            let y = floored.y as i32;
-            let z = floored.z as i32;
+            let (x, y, z) = (floored.x as i32, floored.y as i32, floored.z as i32);
             let key = spatial_key(x, y, z);
-            
             touched_keys.insert(key);
 
             if let Some(mut voxel) = self.voxels.get_mut_by_key(key) {
                 Self::update_voxel_temporal(voxel.value_mut(), true, seq);
             } else {
                 let mut v = Voxel::new(x, y, z, true, seq);
-                v.occupancy_history = 1; 
+                v.occupancy_history = 1;
                 v.entropy = Self::calculate_entropy(v.occupancy_history);
-                self.voxels.insert_by_key(key, v);
+                self.voxels.insert_and_activate(key, v);
             }
         }
 
-        self.voxels.iter_mut().for_each(|mut entry| {
-            let key = *entry.key();
+        // 2. Sparse Aging Loop: Only update voxels that are currently "Active"
+        let mut to_deactivate = Vec::new();
+        for key_ref in self.voxels.active_keys.iter() {
+            let key = *key_ref;
             if !touched_keys.contains(&key) {
-                Self::update_voxel_temporal(entry.value_mut(), false, seq);
+                if let Some(mut voxel) = self.voxels.get_mut_by_key(key) {
+                    Self::update_voxel_temporal(voxel.value_mut(), false, seq);
+                    
+                    // Optimization: If a voxel has been empty for 32 ticks, stop tracking it in the active set.
+                    if voxel.occupancy_history == 0 {
+                        to_deactivate.push(key);
+                    }
+                }
             }
-        });
+        }
+
+        // Clean up inactive voxels
+        for key in to_deactivate {
+            self.voxels.active_keys.remove(&key);
+        }
 
         self.push_snapshot();
     }
@@ -136,64 +160,54 @@ impl WorldModel {
         voxel.occupancy_history = (voxel.occupancy_history << 1) | (occupied as u32);
         voxel.occupied = occupied;
         voxel.entropy = Self::calculate_entropy(voxel.occupancy_history);
+        
+        // Use 32.0 as the window for anomaly detection
         let historical_p = voxel.occupancy_history.count_ones() as f32 / 32.0;
         voxel.anomaly = ((occupied as u32 as f32) - historical_p).abs() > ANOMALY_THRESHOLD;
         voxel.last_updated_seq = seq;
     }
 
+    // Replace the .map(|v| { ... }) block in delta_since with this:
     pub fn delta_since(&self, since: u64) -> DeltaResponse {
-        if since >= self.sequence_id {
-            return DeltaResponse { sequence_id: self.sequence_id, changed: vec![] };
+        let current_seq = self.sequence_id();
+        if since >= current_seq {
+            return DeltaResponse { sequence_id: current_seq, changed: vec![] };
         }
 
         let mut changed: Vec<ChangedVoxel> = self.voxels
             .collect_changed_since(since)
             .into_iter()
-            .map(|v| ChangedVoxel {
-                key: spatial_key(v.x, v.y, v.z),
-                x: v.x, y: v.y, z: v.z,
-                occupied: v.occupied, entropy: v.entropy,
-                anomaly: v.anomaly, seq: v.last_updated_seq,
-            })
+            .map(|v| ChangedVoxel::from_voxel(&v)) // <--- Use our helper here!
             .collect();
 
         changed.sort_unstable_by_key(|c| c.key);
-        DeltaResponse { sequence_id: self.sequence_id, changed }
+        DeltaResponse { sequence_id: current_seq, changed }
     }
 
-    pub fn tick_demo(&mut self) {
+    pub fn tick_demo(&self) {
         let synthetic_points = vec![
             Vec3::new(1.4, 1.2, 1.0),
             Vec3::new(2.6, 1.0, 0.3),
             Vec3::new(0.5, 2.1, 0.0),
         ];
-
         self.ingest_point_cloud(synthetic_points);
-
-        let toggle_key = spatial_key(3, 1, 0);
-        if let Some(mut voxel) = self.voxels.get_mut_by_key(toggle_key) {
-            let next_state = !voxel.occupied;
-            Self::update_voxel_temporal(voxel.value_mut(), next_state, self.sequence_id);
-        } else {
-            let v = Voxel::new(3, 1, 0, true, self.sequence_id);
-            self.voxels.insert_by_key(toggle_key, v);
-        }
-        
-        self.push_snapshot();
     }
 
     fn push_snapshot(&self) {
+        // Warning: push_snapshot() is currently O(N). 
+        // In a production world-class engine, you should only snapshot every X seconds 
+        // or use an Incremental Snapshot strategy.
         let voxels = self.all_voxels();
         let structural_integrity = self.structural_integrity_score();
 
         let snap = Snapshot {
-            sequence_id: self.sequence_id,
+            sequence_id: self.sequence_id(),
             structural_integrity,
             voxels,
         };
 
         let mut history = self.history.write();
-        if history.len() == MAX_HISTORY { history.pop_front(); }
+        if history.len() >= MAX_HISTORY { history.pop_front(); }
         history.push_back(snap);
     }
 }

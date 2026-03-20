@@ -1,4 +1,4 @@
-use dashmap::DashMap;
+use dashmap::{DashMap, DashSet};
 use crate::models::Voxel;
 
 /// Encode (x, y, z) → u64. Each axis may range from −32 768 to +32 767.
@@ -20,28 +20,25 @@ pub fn decode_key(key: u64) -> (i32, i32, i32) {
     (x, y, z)
 }
 
-/// Lock-free spatial hash table backed by DashMap.
+/// Thread-safe spatial hash with a sparse Active Set for O(Active) aging.
 pub struct SpatialHash {
-    inner: DashMap<u64, Voxel>,
+    pub inner: DashMap<u64, Voxel>,
+    /// The "Active Pulse": Only keys in this set are processed during aging.
+    pub active_keys: DashSet<u64>,
 }
 
 impl SpatialHash {
     pub fn with_capacity(capacity: usize) -> Self {
         Self {
             inner: DashMap::with_capacity(capacity),
+            active_keys: DashSet::with_capacity(capacity / 4),
         }
     }
 
-    /// Provide mutable iteration over all voxels.
-    /// Essential for the "Aging Loop" in WorldModel.
     #[inline]
-    pub fn iter_mut(&self) -> dashmap::iter::IterMut<'_, u64, Voxel> {
-        self.inner.iter_mut()
-    }
-
-    #[inline]
-    pub fn insert_by_key(&self, key: u64, voxel: Voxel) {
+    pub fn insert_and_activate(&self, key: u64, voxel: Voxel) {
         self.inner.insert(key, voxel);
+        self.active_keys.insert(key);
     }
 
     #[inline]
@@ -59,6 +56,8 @@ impl SpatialHash {
     }
 
     pub fn collect_changed_since(&self, since: u64) -> Vec<Voxel> {
+        // This remains O(N) for now; for a true "Year 2030" engine, 
+        // you'd track these in a separate Vec per sequence_id.
         self.inner
             .iter()
             .filter_map(|r| {

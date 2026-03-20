@@ -85,6 +85,22 @@ pub struct ChangedVoxel {
     pub seq: u64,
 }
 
+impl ChangedVoxel {
+    pub fn from_voxel(v: &Voxel) -> Self {
+        Self {
+            // Using the spatial_key utility from our spatial_hash module
+            key: crate::spatial_hash::spatial_key(v.x, v.y, v.z),
+            x: v.x, 
+            y: v.y, 
+            z: v.z,
+            occupied: v.occupied,
+            entropy: v.entropy,
+            anomaly: v.anomaly,
+            seq: v.last_updated_seq,
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // API request / response types
 // ---------------------------------------------------------------------------
