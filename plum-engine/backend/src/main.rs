@@ -2,6 +2,7 @@ mod state;
 mod models;
 mod routes;
 mod world;
+mod spatial_hash;
 
 use axum::{
     routing::{get, post},
@@ -11,7 +12,7 @@ use std::net::SocketAddr;
 use tower_http::cors::CorsLayer;
 
 use state::AppState;
-use routes::{dev_tick, get_latest_history, get_voxels, get_world_delta, ping};
+use routes::{dev_tick, get_latest_history, get_voxels, get_world_delta, ingest_point_cloud, ping};
 
 #[tokio::main]
 async fn main() {
@@ -21,13 +22,14 @@ async fn main() {
         .route("/api/ping", get(ping))
         .route("/api/voxels", get(get_voxels))
         .route("/api/world/delta", get(get_world_delta))
+        .route("/api/world/ingest", post(ingest_point_cloud))
         .route("/api/history/latest", get(get_latest_history))
         .route("/api/dev/tick", post(dev_tick))
         .layer(CorsLayer::permissive())
         .with_state(state);
 
     let addr = SocketAddr::from(([127, 0, 0, 1], 3000));
-    println!("Backend running on http://{}", addr);
+    println!("🚀 Plum-Rockets 4D World Engine — http://{}", addr);
 
     let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
     axum::serve(listener, app).await.unwrap();
