@@ -39,7 +39,6 @@ async fn main() {
         .with_state(state);
 
     // 4. Set the listener address (127.0.0.1:3000)
-    // Change this line in main.rs:
     // Use an environment variable, or default to 0.0.0.0
     let host = std::env::var("HOST").unwrap_or_else(|_| "0.0.0.0".to_string());
     let port = 3000;

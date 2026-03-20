@@ -18,7 +18,7 @@ We have moved beyond a simple REST API to a dedicated Physical AI Engine. Our ar
 *   **Sparse Aging Loop:** Unlike traditional voxel engines that scan the whole world, Plum Rockets maintains an **Active Set** of voxels. It only processes "living" data, moving complexity from $O(\text{Total Voxels})$ to $O(\text{Active Voxels})$.
 *   **Shannon Entropy Analysis:** Real-time uncertainty calculation per voxel using:
     $$H(V) = -\sum p_i \log p_i$$
-*   **WSL2 Optimized:** Backend binds to `0.0.0.0` to ensure seamless signal passthrough from Linux subsystems to Windows browsers and MacOS systems.
+*   **WSL2 Optimized:** Backend binds to an environment variable or defaults to `0.0.0.0` to ensure seamless signal passthrough from Linux subsystems to Windows browsers and MacOS systems.
 
 ### 2. Frontend: The Predictive Lens
 
