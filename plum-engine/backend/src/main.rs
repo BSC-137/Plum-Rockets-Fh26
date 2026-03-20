@@ -40,8 +40,12 @@ async fn main() {
 
     // 4. Set the listener address (127.0.0.1:3000)
     // Change this line in main.rs:
-    let addr = SocketAddr::from(([0, 0, 0, 0], 3000));
-    println!("🚀 Plum Rockets 4D Engine running on http://{}", addr);
+    // Use an environment variable, or default to 0.0.0.0
+    let host = std::env::var("HOST").unwrap_or_else(|_| "0.0.0.0".to_string());
+    let port = 3000;
+    let addr: SocketAddr = format!("{}:{}", host, port).parse().unwrap();
+
+    println!("🚀 Plum Rockets Engine Pulse: http://{}", addr);
     println!("- GET  /api/ping          (Health Check)");
     println!("- GET  /api/world/delta   (Sparse Updates)");
     println!("- POST /api/world/ingest  (LiDAR Stream)");
