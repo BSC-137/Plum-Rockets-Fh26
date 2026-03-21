@@ -1,23 +1,25 @@
-import React, { useEffect, useRef, useMemo } from 'react';
+import React, { useEffect, useRef, useMemo, useState } from 'react';
 import { Canvas } from '@react-three/fiber';
 import { OrbitControls, PerspectiveCamera } from '@react-three/drei';
 import * as THREE from 'three';
 import { useWorldStore } from './store'; 
-import { Activity, Shield, Zap } from 'lucide-react';
+import { Activity, Shield, Zap, Clock } from 'lucide-react'; 
 import './App.css';
 
 const VoxelVolume: React.FC = () => {
   const meshRef = useRef<THREE.InstancedMesh>(null);
   const voxels = useWorldStore((state) => state.voxelsArray);
   
-  const colorNominal = useMemo(() => new THREE.Color("#00FF41"), []);
-  const colorAnomaly = useMemo(() => new THREE.Color("#FF3E00"), []);
+
+  const colorStable = useMemo(() => new THREE.Color("#00FF41"), []);  
+  const colorWarning = useMemo(() => new THREE.Color("#FFD700"), []); 
+  const colorAnomaly = useMemo(() => new THREE.Color("#FF3E00"), []); 
   const colorGhost = useMemo(() => new THREE.Color("#111111"), []);
 
   const edgeGeo = useMemo(() => new THREE.EdgesGeometry(new THREE.BoxGeometry(0.92, 0.92, 0.92)), []);
 
   useEffect(() => {
-    if (!meshRef.current ||  voxels.length === 0) return;
+    if (!meshRef.current || voxels.length === 0) return;
     
     const tempMatrix = new THREE.Matrix4();
     const tempColor = new THREE.Color();
@@ -26,31 +28,40 @@ const VoxelVolume: React.FC = () => {
       tempMatrix.setPosition(v.x, v.y, v.z);
       meshRef.current!.setMatrixAt(i, tempMatrix);
 
-      if (v.anomaly) tempColor.copy(colorAnomaly);
-      else if (!v.occupied) tempColor.copy(colorGhost).multiplyScalar(v.entropy + 0.05);
-      else tempColor.copy(colorNominal).multiplyScalar(1.0 - v.entropy * 0.4);
+      if (v.anomaly) {
+        tempColor.copy(colorAnomaly);
+      } else if (!v.occupied) {
+        tempColor.copy(colorGhost).multiplyScalar(v.entropy + 0.05);
+      } else {
+       
+        if (v.entropy > 0.6) {
+         
+          tempColor.lerpColors(colorWarning, colorAnomaly, (v.entropy - 0.6) / 0.4);
+        } else {
+          
+          tempColor.lerpColors(colorStable, colorWarning, v.entropy / 0.6);
+        }
+      }
 
       meshRef.current!.setColorAt(i, tempColor);
     });
 
     meshRef.current.instanceMatrix.needsUpdate = true;
-   
     if (meshRef.current.instanceColor) meshRef.current.instanceColor.needsUpdate = true;
-  }, [voxels, colorNominal, colorAnomaly, colorGhost]);
+  }, [voxels, colorStable, colorWarning, colorAnomaly, colorGhost]);
 
   return (
-    <group>
-      <instancedMesh ref={meshRef} args={[null as any, null as any, 10000]} count={voxels.length}>
-        <boxGeometry args={[0.92, 0.92, 0.92]} />
-        <meshBasicMaterial transparent opacity={0.15} depthWrite={false} />
-      </instancedMesh>
-
-    </group>
+    <instancedMesh ref={meshRef} args={[null as any, null as any, 10000]} count={voxels.length}>
+      <boxGeometry args={[0.92, 0.92, 0.92]} />
+      <meshBasicMaterial transparent opacity={0.4} />
+    </instancedMesh>
   );
 };
 
 const App: React.FC = () => {
   const { fetchInitial, pollDeltas, sequenceId, count } = useWorldStore();
+  
+  const [historyValue, setHistoryValue] = useState(100);
 
   useEffect(() => {
     fetchInitial();
@@ -62,7 +73,7 @@ const App: React.FC = () => {
     <div className="engine-container">
       <aside className="sidebar">
         <div className="sidebar-header">
-          <Zap size={14} fill="#00FF41" /> PLUM_ENGINE_V1
+          <Zap size={15} fill="#00FF41" /> PLUM_ENGINE_V1
         </div>
 
         <div className="sidebar-section">
@@ -86,23 +97,39 @@ const App: React.FC = () => {
         <div className="canvas-container">
           <Canvas>
             <color attach="background" args={['#020202']} />
-            <PerspectiveCamera makeDefault position={[10, 10, 10]} />
-            <OrbitControls autoRotate autoRotateSpeed={0.5} />
-            <gridHelper 
-              args={[20, 20, "#151515", "#151515"]} 
-              position={[0, -0.51, 0]} 
-            />
+            <PerspectiveCamera makeDefault position={[12, 12, 12]} />
+            
+            <OrbitControls autoRotate={historyValue === 100} autoRotateSpeed={0.5} 
+            enableDamping
+            dampingFactor={0.05}/>
+            <gridHelper args={[20, 20, "#151515", "#151515"]} position={[0, -0.51, 0]} />
             <VoxelVolume />
           </Canvas>
+
+        
+          <div className="hindsight-panel">
+            <div className="panel-header">
+              <Clock size={15} />
+              <span>TEMPORAL_HINDSIGHT</span>
+              <span className="val">{historyValue === 100 ? "LIVE" : `-${100 - historyValue}%`}</span>
+            </div>
+            <input 
+              type="range" 
+              className="custom-slider"
+              min="0" max="100" 
+              value={historyValue}
+              onChange={(e) => setHistoryValue(Number(e.target.value))}
+            />
+          </div>
         </div>
 
         <footer className="bottom-bar">
           <div className="bottom-info">
-            <span className="info-item"><Activity size={10}/> REALTIME_BUFFER_OK</span>
+            <span className="info-item"><Activity size={10}/> REALTIME_BUFFER</span>
             <span className="info-item"><Shield size={10}/> ENCRYPTION: AES-256</span>
             <span className="info-item seq-box">SEQ_ID: <span className="white">{sequenceId}</span></span>
           </div>
-          <div className="bottom-location">SYDNEY_LAB // USYD_SUDATA</div>
+          <div className="bottom-location">PLUM_ROCKETS | USYD_SUDATA</div>
         </footer>
       </main>
     </div>
