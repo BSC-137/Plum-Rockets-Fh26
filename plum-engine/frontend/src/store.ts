@@ -56,7 +56,7 @@ export const useWorldStore = create<WorldState>((set, get) => ({
   mode: 'LIVE',
   tickOffset: 0,
   structuralHealth: 1,
-  uploadStatus: 'AWAITING_DATASET',
+  uploadStatus: 'EXPECT_DATASET',
   uploadInFlight: false,
 
   async syncWorld() {
