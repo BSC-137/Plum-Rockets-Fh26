@@ -2,9 +2,91 @@ import { useEffect, useRef, useState } from 'react';
 import { Canvas } from '@react-three/fiber';
 import { OrbitControls, PerspectiveCamera } from '@react-three/drei';
 import { motion } from 'framer-motion';
+import { PLYLoader } from 'three/examples/jsm/loaders/PLYLoader.js';
 import { useWorldStore } from './store';
 import { VoxelEngine } from './VoxelEngine';
 import './App.css';
+
+type Point3 = { x: number; y: number; z: number };
+
+const API_INGEST = 'http://localhost:3000/api/world/ingest';
+const BATCH_SIZE = 2000;
+const STREAM_DELAY_MS = 100;
+
+const INSIGHT_MESSAGES = [
+  'ANALYZING_SPATIAL_DENSITY',
+  'NOISE_FLOOR_NOMINAL',
+  'VOXEL_OCCUPANCY_STABLE',
+  'TEMPORAL_GRADIENT_LOCKED',
+  'DISTRIBUTION_CLUSTERING_HEALTHY',
+];
+
+const wait = (ms: number) => new Promise<void>((resolve) => window.setTimeout(resolve, ms));
+
+function isFinitePoint(point: Point3) {
+  return Number.isFinite(point.x) && Number.isFinite(point.y) && Number.isFinite(point.z);
+}
+
+async function parsePlyFile(file: File): Promise<Point3[]> {
+  const buffer = await file.arrayBuffer();
+  const geometry = new PLYLoader().parse(buffer);
+  const position = geometry.getAttribute('position');
+  if (!position) return [];
+
+  const points: Point3[] = [];
+  for (let i = 0; i < position.count; i += 1) {
+    const point = {
+      x: position.getX(i),
+      y: position.getY(i),
+      z: position.getZ(i),
+    };
+    if (isFinitePoint(point)) points.push(point);
+  }
+  return points;
+}
+
+async function parseCsvFile(file: File): Promise<Point3[]> {
+  const text = await file.text();
+  const lines = text.split(/\r?\n/);
+  const points: Point3[] = [];
+
+  for (const rawLine of lines) {
+    const line = rawLine.trim();
+    if (!line || line.startsWith('#')) continue;
+
+    const values = line.split(/[,\s]+/).filter(Boolean);
+    if (values.length < 3) continue;
+
+    const point = {
+      x: Number(values[0]),
+      y: Number(values[1]),
+      z: Number(values[2]),
+    };
+
+    if (isFinitePoint(point)) points.push(point);
+  }
+
+  return points;
+}
+
+async function parseJsonFile(file: File): Promise<Point3[]> {
+  const text = await file.text();
+  const payload: unknown = JSON.parse(text);
+  if (!Array.isArray(payload)) return [];
+
+  const points: Point3[] = [];
+  for (const entry of payload) {
+    if (!entry || typeof entry !== 'object') continue;
+    const candidate = entry as Record<string, unknown>;
+    const point = {
+      x: Number(candidate.x),
+      y: Number(candidate.y),
+      z: Number(candidate.z),
+    };
+    if (isFinitePoint(point)) points.push(point);
+  }
+  return points;
+}
 
 function formatSignalAge(timestamp: number | null) {
   if (!timestamp) return 'AWAITING';
@@ -89,12 +171,18 @@ function SystemControls() {
 
 function DatasetUploadPanel() {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
-  const uploadDataset = useWorldStore((state) => state.uploadDataset);
+  const queuedFileName = useWorldStore((state) => state.queuedFileName);
   const uploadStatus = useWorldStore((state) => state.uploadStatus);
-  const uploadInFlight = useWorldStore((state) => state.uploadInFlight);
+  const isUploading = useWorldStore((state) => state.isUploading);
+  const setUploadStatus = useWorldStore((state) => state.setUploadStatus);
+  const setQueuedFileName = useWorldStore((state) => state.setQueuedFileName);
+  const setUploadProgress = useWorldStore((state) => state.setUploadProgress);
+  const setIsUploading = useWorldStore((state) => state.setIsUploading);
+  const pushLog = useWorldStore((state) => state.pushLog);
+  const pollDeltas = useWorldStore((state) => state.pollDeltas);
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
 
-  const acceptedTypes = '.csv,.json,.lidar,.las,.laz,text/csv,application/json';
+  const acceptedTypes = '.ply,.csv,.json,text/csv,application/json';
 
   const handleSelect = () => {
     fileInputRef.current?.click();
@@ -103,11 +191,71 @@ function DatasetUploadPanel() {
   const handleFileChange = (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0] ?? null;
     setSelectedFile(file);
+    setQueuedFileName(file?.name ?? 'NONE');
+    setUploadStatus(file ? 'READY' : 'EXPECT_DATASET');
+    setUploadProgress(0);
+    if (file) pushLog(`QUEUED_DATASET_${file.name.toUpperCase()}`);
+  };
+
+  const parsePoints = async (file: File): Promise<Point3[]> => {
+    const extension = file.name.split('.').pop()?.toLowerCase() ?? '';
+    if (extension === 'ply') return parsePlyFile(file);
+    if (extension === 'csv') return parseCsvFile(file);
+    if (extension === 'json') return parseJsonFile(file);
+    throw new Error(`Unsupported file format: ${extension || 'unknown'}`);
+  };
+
+  const streamToEngine = async (points: Point3[]) => {
+    if (points.length === 0) throw new Error('No valid points detected');
+
+    const totalBatches = Math.ceil(points.length / BATCH_SIZE);
+    let batchCounter = 0;
+
+    for (let offset = 0; offset < points.length; offset += BATCH_SIZE) {
+      const batch = points.slice(offset, offset + BATCH_SIZE);
+      const response = await fetch(API_INGEST, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ points: batch }),
+      });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+
+      batchCounter += 1;
+      setUploadProgress(Math.round((batchCounter / totalBatches) * 100));
+      await pollDeltas();
+
+      if (batchCounter % 5 === 0) {
+        const insight = INSIGHT_MESSAGES[Math.floor(batchCounter / 5) % INSIGHT_MESSAGES.length];
+        pushLog(insight);
+      }
+
+      await wait(STREAM_DELAY_MS);
+    }
   };
 
   const handleUpload = async () => {
-    if (!selectedFile || uploadInFlight) return;
-    await uploadDataset(selectedFile);
+    if (!selectedFile || isUploading) return;
+
+    setIsUploading(true);
+    setUploadProgress(0);
+    setUploadStatus('STREAMING...');
+    pushLog('STREAM_CHANNEL_ACTIVE');
+
+    try {
+      const points = await parsePoints(selectedFile);
+      pushLog(`PARSED_POINTS_${points.length}`);
+      await streamToEngine(points);
+      setUploadStatus('COMPLETE');
+      pushLog('INGESTION_COMPLETE');
+    } catch (error) {
+      console.warn('Dataset streaming failed', error);
+      setUploadStatus('UPLOAD_FAULT');
+      pushLog('UPLOAD_FAULT');
+    } finally {
+      setIsUploading(false);
+    }
   };
 
   return (
@@ -137,20 +285,20 @@ function DatasetUploadPanel() {
           type="button"
           className="glass-button"
           onClick={() => void handleUpload()}
-          disabled={!selectedFile || uploadInFlight}
+          disabled={!selectedFile || isUploading}
         >
-          {uploadInFlight ? '> TRANSMITTING' : '> SEND_TO_BACKEND'}
+          {isUploading ? '> STREAMING...' : '> SEND_TO_BACKEND'}
         </button>
       </div>
 
       <div className="telemetry-block upload-telemetry">
         <div className="telemetry-row">
           <span>Queued_File</span>
-          <strong>{selectedFile?.name ?? 'NONE'}</strong>
+          <strong>{queuedFileName}</strong>
         </div>
         <div className="telemetry-row">
           <span>Transfer_Status</span>
-          <strong>{uploadStatus}</strong>
+          <strong className="status-peach">{uploadStatus}</strong>
         </div>
       </div>
     </section>
@@ -161,10 +309,12 @@ function EngineMetricsPanel() {
   const metrics = useWorldStore((state) => state.metrics);
   const mode = useWorldStore((state) => state.mode);
   const setMode = useWorldStore((state) => state.setMode);
+  const uploadProgress = useWorldStore((state) => state.uploadProgress);
+  const isUploading = useWorldStore((state) => state.isUploading);
 
   return (
     <motion.section
-      className={`engine-panel metrics-panel ${mode === 'TEMPORAL_HINDSIGHT' ? 'hindsight' : 'live'}`}
+      className={`engine-panel metrics-panel engine-core ${mode === 'TEMPORAL_HINDSIGHT' ? 'hindsight' : 'live'}`}
       initial={false}
       animate={{
         y: mode === 'TEMPORAL_HINDSIGHT' ? 4 : 0,
@@ -204,6 +354,10 @@ function EngineMetricsPanel() {
           Temporal_Hindsight
         </button>
       </div>
+      <div
+        className={`engine-core-progress ${isUploading || uploadProgress > 0 ? 'visible' : ''}`}
+        style={{ width: `${uploadProgress}%` }}
+      />
     </motion.section>
   );
 }
@@ -261,24 +415,24 @@ function TemporalScrubber() {
 }
 
 export default function App() {
-  const syncWorld = useWorldStore((state) => state.syncWorld);
+  const pollDeltas = useWorldStore((state) => state.pollDeltas);
   const structuralHealth = useWorldStore((state) => state.structuralHealth);
 
   useEffect(() => {
-    void syncWorld();
+    void pollDeltas();
     const interval = window.setInterval(() => {
-      void syncWorld();
+      void pollDeltas();
     }, 100);
 
     return () => window.clearInterval(interval);
-  }, [syncWorld]);
+  }, [pollDeltas]);
 
   return (
     <main className="engine-shell">
       <div className="scene-frame">
         <Canvas dpr={[1, 1.8]}>
-          <color attach="background" args={['#0A020C']} />
-          <fog attach="fog" args={['#0A020C', 14, 30]} />
+          <color attach="background" args={['#080408']} />
+          <fog attach="fog" args={['#080408', 14, 30]} />
           <PerspectiveCamera makeDefault position={[9, 7, 10]} fov={42} />
           <ambientLight intensity={0.75} color="#ffd7c6" />
           <directionalLight position={[8, 10, 6]} intensity={2.2} color="#ffe0d2" />
