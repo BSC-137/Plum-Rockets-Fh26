@@ -1,7 +1,9 @@
 import { create } from 'zustand';
 import type { Voxel, VoxelsResponse } from './types';
+import { generateGeminiAudit } from './utils/geminiAudit';
 
 const API_BASE = 'http://localhost:3000/api';
+const REPORT_CACHE_KEY = 'plum_engine_cached_reports_v1';
 
 export type ViewMode = 'LIVE' | 'TEMPORAL_HINDSIGHT';
 
@@ -18,6 +20,25 @@ export interface HistoryEntry {
   entropySlope: number;
   anomalyCount: number;
   voxelCount: number;
+  anomalyDensity: number;
+  volatilityIndex: number;
+  saturationVelocity: number;
+  newAnomalyCount: number;
+  shannonEntropyCoefficient: number;
+  sectorMapping: {
+    denseClusters: number;
+    sparseNoise: number;
+  };
+  volatileVoxels: Array<{
+    key: string;
+    x: number;
+    y: number;
+    z: number;
+    entropy: number;
+    volatilityScore: number;
+    sector: 'DENSE_CLUSTER' | 'SPARSE_NOISE';
+  }>;
+  anomalyKeys: string[];
 }
 
 const clampTickOffset = (tickOffset: number) => Math.max(0, Math.min(31, tickOffset));
@@ -34,6 +55,47 @@ const computeMeanEntropy = (voxels: Voxel[]) => {
 };
 
 const computeAnomalyCount = (voxels: Voxel[]) => voxels.reduce((sum, voxel) => sum + (voxel.anomaly ? 1 : 0), 0);
+
+const buildVoxelKey = (voxel: Pick<Voxel, 'x' | 'y' | 'z'>) => `${voxel.x}:${voxel.y}:${voxel.z}`;
+
+const popCount32 = (value: number) => {
+  let x = value >>> 0;
+  let count = 0;
+  while (x !== 0) {
+    x &= x - 1;
+    count += 1;
+  }
+  return count;
+};
+
+const variance = (values: number[]) => {
+  if (values.length < 2) return 0;
+  const mean = values.reduce((sum, value) => sum + value, 0) / values.length;
+  const squaredDistance = values.reduce((sum, value) => sum + (value - mean) ** 2, 0);
+  return squaredDistance / values.length;
+};
+
+const clusterAnomalies = (anomalies: Voxel[]) => {
+  const radiusSquared = 2.25;
+
+  return anomalies.map((voxel) => {
+    let neighbors = 0;
+    for (const other of anomalies) {
+      if (voxel === other) continue;
+      const dx = voxel.x - other.x;
+      const dy = voxel.y - other.y;
+      const dz = voxel.z - other.z;
+      if (dx * dx + dy * dy + dz * dz <= radiusSquared) {
+        neighbors += 1;
+      }
+    }
+    return {
+      voxel,
+      neighbors,
+      sector: (neighbors >= 3 ? 'DENSE_CLUSTER' : 'SPARSE_NOISE') as 'DENSE_CLUSTER' | 'SPARSE_NOISE',
+    };
+  });
+};
 
 const buildIngestPayload = (voxels: Voxel[]) => ({
   points: voxels
@@ -53,6 +115,24 @@ export const getVoxelVisibility = (history: number, tickOffset: number): 0 | 1 =
   return ((history >>> safeTickOffset) & 1) as 0 | 1;
 };
 
+const loadCachedReports = (): Record<number, string> => {
+  if (typeof window === 'undefined') return {};
+  try {
+    const raw = window.localStorage.getItem(REPORT_CACHE_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw) as Record<string, string>;
+    return Object.entries(parsed).reduce<Record<number, string>>((acc, [key, value]) => {
+      const tick = Number(key);
+      if (Number.isFinite(tick) && typeof value === 'string') {
+        acc[tick] = value;
+      }
+      return acc;
+    }, {});
+  } catch {
+    return {};
+  }
+};
+
 interface WorldState {
   voxels: Voxel[];
   metrics: EngineMetrics;
@@ -64,9 +144,13 @@ interface WorldState {
   uploadProgress: number;
   auditLogs: string[];
   queuedFileName: string;
-  history: any[];
+  history: HistoryEntry[];
   isReportOpen: boolean;
+  reportAnalysis: string;
+  reportLoading: boolean;
+  cachedReports: Record<number, string>;
   pollDeltas: () => Promise<void>;
+  generateAuditReport: () => Promise<void>;
   setUploadStatus: (status: string) => void;
   setQueuedFileName: (fileName: string) => void;
   setUploadProgress: (progress: number) => void;
@@ -97,6 +181,9 @@ export const useWorldStore = create<WorldState>((set, get) => ({
   queuedFileName: 'NONE',
   history: [],
   isReportOpen: false,
+  reportAnalysis: 'Awaiting Gemini structural interpretation...',
+  reportLoading: false,
+  cachedReports: loadCachedReports(),
 
   async pollDeltas() {
     try {
@@ -123,10 +210,46 @@ export const useWorldStore = create<WorldState>((set, get) => ({
           };
         }
 
-        const previousEntry = state.history[state.history.length - 1] as HistoryEntry | undefined;
+        const previousEntry = state.history[state.history.length - 1];
         const deltaTicks = previousEntry ? Math.max(1, payload.sequence_id - previousEntry.tick) : 1;
         const previousMeanEntropy = previousEntry?.meanEntropy ?? meanEntropy;
         const entropySlope = (meanEntropy - previousMeanEntropy) / deltaTicks;
+        const anomalyDensity = voxelCount === 0 ? 0 : anomalyCount / voxelCount;
+
+        const anomalies = payload.voxels.filter((voxel) => voxel.anomaly);
+        const clustered = clusterAnomalies(anomalies);
+        const denseClusters = clustered.filter((item) => item.sector === 'DENSE_CLUSTER').length;
+        const sparseNoise = clustered.length - denseClusters;
+
+        const previousAnomalyKeys = new Set(previousEntry?.anomalyKeys ?? []);
+        const anomalyKeys = anomalies.map((voxel) => buildVoxelKey(voxel));
+        const newAnomalyCount = anomalyKeys.reduce(
+          (sum, key) => sum + (previousAnomalyKeys.has(key) ? 0 : 1),
+          0,
+        );
+        const saturationVelocity = newAnomalyCount / deltaTicks;
+
+        const recentEntropy = [...state.history.slice(-9).map((entry) => entry.meanEntropy), meanEntropy];
+        const volatilityIndex = variance(recentEntropy);
+
+        const volatileVoxels = clustered
+          .map((item) => {
+            const occupancyTransitions = popCount32(
+              (item.voxel.occupancy_history ^ (item.voxel.occupancy_history >>> 1)) & 0x7fffffff,
+            );
+            const volatilityScore = item.voxel.entropy * 0.7 + occupancyTransitions * 0.18 + (item.neighbors === 0 ? 0.25 : 0);
+            return {
+              key: buildVoxelKey(item.voxel),
+              x: item.voxel.x,
+              y: item.voxel.y,
+              z: item.voxel.z,
+              entropy: item.voxel.entropy,
+              volatilityScore,
+              sector: item.sector,
+            };
+          })
+          .sort((a, b) => b.volatilityScore - a.volatilityScore)
+          .slice(0, 20);
 
         const nextEntry: HistoryEntry = {
           tick: payload.sequence_id,
@@ -135,6 +258,17 @@ export const useWorldStore = create<WorldState>((set, get) => ({
           entropySlope,
           anomalyCount,
           voxelCount,
+          anomalyDensity,
+          volatilityIndex,
+          saturationVelocity,
+          newAnomalyCount,
+          shannonEntropyCoefficient: meanEntropy,
+          sectorMapping: {
+            denseClusters,
+            sparseNoise,
+          },
+          volatileVoxels,
+          anomalyKeys,
         };
 
         return {
@@ -177,6 +311,53 @@ export const useWorldStore = create<WorldState>((set, get) => ({
 
   toggleReport(open) {
     set({ isReportOpen: open });
+  },
+
+  async generateAuditReport() {
+    const { history, cachedReports } = get();
+    const latest = history[history.length - 1];
+
+    if (!latest) {
+      set({
+        reportLoading: false,
+        reportAnalysis: 'No telemetry history is available yet.',
+      });
+      return;
+    }
+
+    const currentSequenceId = latest.tick;
+    const cached = cachedReports[currentSequenceId];
+    if (cached) {
+      set({
+        reportLoading: false,
+        reportAnalysis: cached,
+      });
+      return;
+    }
+
+    set({ reportLoading: true });
+    try {
+      const report = await generateGeminiAudit({ history, latest });
+      const nextCache = {
+        ...get().cachedReports,
+        [currentSequenceId]: report,
+      };
+      set({
+        reportAnalysis: report,
+        reportLoading: false,
+        cachedReports: nextCache,
+      });
+
+      if (typeof window !== 'undefined') {
+        window.localStorage.setItem(REPORT_CACHE_KEY, JSON.stringify(nextCache));
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Unknown Gemini error';
+      set({
+        reportLoading: false,
+        reportAnalysis: `## EXECUTIVE SUMMARY\nGemini analysis failed: ${message}`,
+      });
+    }
   },
 
   async syncWorld() {
