@@ -5,6 +5,7 @@ import { motion } from 'framer-motion';
 import { PLYLoader } from 'three/examples/jsm/loaders/PLYLoader.js';
 import { useWorldStore } from './store';
 import { VoxelEngine } from './VoxelEngine';
+import { AuditReport } from './components/AuditReport';
 import './App.css';
 
 type Point3 = { x: number; y: number; z: number };
@@ -139,6 +140,7 @@ function IntegrityGauge({ integrity }: { integrity: number }) {
 function SystemControls() {
   const resetVolumetrics = useWorldStore((state) => state.resetVolumetrics);
   const ingestLastData = useWorldStore((state) => state.ingestLastData);
+  const toggleReport = useWorldStore((state) => state.toggleReport);
   const metrics = useWorldStore((state) => state.metrics);
 
   return (
@@ -149,6 +151,9 @@ function SystemControls() {
       </button>
       <button type="button" className="glass-button" onClick={() => void ingestLastData()}>
         {'> INGEST_LAST_DATA'}
+      </button>
+      <button type="button" className="glass-button" onClick={() => toggleReport(true)}>
+        {'> GENERATE_AUDIT_REPORT'}
       </button>
 
       <div className="telemetry-block">
@@ -417,6 +422,7 @@ function TemporalScrubber() {
 export default function App() {
   const pollDeltas = useWorldStore((state) => state.pollDeltas);
   const structuralHealth = useWorldStore((state) => state.structuralHealth);
+  const isReportOpen = useWorldStore((state) => state.isReportOpen);
 
   useEffect(() => {
     void pollDeltas();
@@ -461,6 +467,7 @@ export default function App() {
           <TemporalScrubber />
         </div>
       </div>
+      {isReportOpen ? <AuditReport /> : null}
     </main>
   );
 }
