@@ -1,82 +1,129 @@
 import { create } from 'zustand';
-import { Voxel, VoxelsResponse, DeltaResponse } from './types';
+import type { Voxel, VoxelsResponse } from './types';
 
-const API_BASE = "http://localhost:3000/api";
+const API_BASE = 'http://localhost:3000/api';
 
-// Top-tier helper: Create a unique string key from coordinates.
-// This is more reliable in JS than bit-shifted u64s.
-const getVoxelKey = (v: { x: number; y: number; z: number }) => `${v.x}:${v.y}:${v.z}`;
+export type ViewMode = 'LIVE' | 'TEMPORAL_HINDSIGHT';
+
+export interface EngineMetrics {
+  VOXEL_COUNT: number;
+  SEQ_ID: number;
+  LATEST_SIGNAL: number | null;
+}
+
+const clampTickOffset = (tickOffset: number) => Math.max(0, Math.min(31, tickOffset));
+
+const computeStructuralHealth = (voxels: Voxel[]) => {
+  if (voxels.length === 0) return 1;
+  const averageEntropy = voxels.reduce((sum, voxel) => sum + voxel.entropy, 0) / voxels.length;
+  return Math.max(0, Math.min(1, 1 - averageEntropy));
+};
+
+const buildIngestPayload = (voxels: Voxel[]) => ({
+  points: voxels
+    .filter((voxel) => voxel.occupied)
+    .map(({ x, y, z }) => ({ x, y, z })),
+});
+
+export const getVoxelVisibility = (history: number, tickOffset: number): 0 | 1 => {
+  const safeTickOffset = clampTickOffset(tickOffset);
+  return ((history >>> safeTickOffset) & 1) as 0 | 1;
+};
 
 interface WorldState {
-  voxels: Map<string, Voxel>;
-  voxelsArray: Voxel[];
-  count: number;
-  sequenceId: number;
-  fetchInitial: () => Promise<void>;
-  pollDeltas: () => Promise<void>;
+  voxels: Voxel[];
+  metrics: EngineMetrics;
+  mode: ViewMode;
+  tickOffset: number;
+  structuralHealth: number;
+  syncWorld: () => Promise<void>;
+  setMode: (mode: ViewMode) => void;
+  setTickOffset: (tickOffset: number) => void;
+  resetVolumetrics: () => Promise<void>;
+  ingestLastData: () => Promise<void>;
 }
 
 export const useWorldStore = create<WorldState>((set, get) => ({
-  voxels: new Map(),
-  voxelsArray: [],
-  count: 0,
-  sequenceId: 0,
+  voxels: [],
+  metrics: {
+    VOXEL_COUNT: 0,
+    SEQ_ID: 0,
+    LATEST_SIGNAL: null,
+  },
+  mode: 'LIVE',
+  tickOffset: 0,
+  structuralHealth: 1,
 
-  fetchInitial: async () => {
+  async syncWorld() {
     try {
-      const res = await fetch(`${API_BASE}/world/voxels`);
-      if (!res.ok) throw new Error(`HTTP Error: ${res.status}`);
-      
-      const data: VoxelsResponse = await res.json();
-      const voxelMap = new Map<string, Voxel>();
-      
-      data.voxels.forEach(v => {
-        // Generate key manually since the base Voxel struct doesn't have it
-        const key = getVoxelKey(v);
-        voxelMap.set(key, { ...v, key }); // Inject key into the object
+      const response = await fetch(`${API_BASE}/world/voxels`);
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+
+      const payload: VoxelsResponse = await response.json();
+      const structuralHealth = computeStructuralHealth(payload.voxels);
+      const latestSignal = Date.now();
+
+      set((state) => {
+        if (state.metrics.SEQ_ID === payload.sequence_id && state.voxels.length === payload.voxels.length) {
+          return {
+            metrics: {
+              ...state.metrics,
+              LATEST_SIGNAL: latestSignal,
+            },
+          };
+        }
+
+        return {
+          voxels: payload.voxels,
+          structuralHealth,
+          metrics: {
+            VOXEL_COUNT: payload.voxels.length,
+            SEQ_ID: payload.sequence_id,
+            LATEST_SIGNAL: latestSignal,
+          },
+        };
       });
-      
-      const array = Array.from(voxelMap.values());
-      
-      set({ 
-        voxels: voxelMap, 
-        voxelsArray: array,
-        count: array.length,
-        sequenceId: data.sequence_id 
-      });
-      console.log(`✅ Initial Sync: ${array.length} voxels`);
-    } catch (e) { 
-      console.error("❌ Initial Sync Failed:", e); 
+    } catch (error) {
+      console.warn('World sync failed', error);
     }
   },
 
-  pollDeltas: async () => {
-    const { sequenceId, voxels } = get();
+  setMode(mode) {
+    set((state) => ({
+      mode,
+      tickOffset: mode === 'LIVE' ? 0 : clampTickOffset(state.tickOffset || 1),
+    }));
+  },
+
+  setTickOffset(tickOffset) {
+    const safeTickOffset = clampTickOffset(tickOffset);
+    set({
+      tickOffset: safeTickOffset,
+      mode: safeTickOffset === 0 ? 'LIVE' : 'TEMPORAL_HINDSIGHT',
+    });
+  },
+
+  async resetVolumetrics() {
+    set({ mode: 'LIVE', tickOffset: 0 });
+    await get().syncWorld();
+  },
+
+  async ingestLastData() {
+    const { voxels, syncWorld } = get();
+
     try {
-      const res = await fetch(`${API_BASE}/world/delta?since=${sequenceId}`);
-      if (!res.ok) return;
-      
-      const data: DeltaResponse = await res.json();
-      
-      if (data.changed.length > 0) {
-        const newMap = new Map(voxels);
-        
-        data.changed.forEach(v => {
-          const key = getVoxelKey(v);
-          newMap.set(key, { ...v, key });
-        });
-        
-        const array = Array.from(newMap.values());
-        
-        set({ 
-          voxels: newMap, 
-          voxelsArray: array,
-          count: array.length,
-          sequenceId: data.sequence_id 
-        });
-      }
-    } catch (e) {
-      console.warn("⚠️ Telemetry Dropout");
+      const response = await fetch(`${API_BASE}/world/ingest`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(buildIngestPayload(voxels)),
+      });
+
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      await syncWorld();
+    } catch (error) {
+      console.warn('Data ingest failed', error);
     }
-  }
+  },
 }));

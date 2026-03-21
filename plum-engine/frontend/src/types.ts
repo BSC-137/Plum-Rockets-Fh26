@@ -1,5 +1,16 @@
 export interface Voxel {
-  key: string; // We treat u64 as string in JS to avoid precision loss
+  x: number;
+  y: number;
+  z: number;
+  occupied: boolean;
+  entropy: number;
+  anomaly: boolean;
+  occupancy_history: number;
+  last_updated_seq: number;
+}
+
+export interface DeltaVoxel {
+  key: string;
   x: number;
   y: number;
   z: number;
@@ -11,10 +22,16 @@ export interface Voxel {
 
 export interface DeltaResponse {
   sequence_id: number;
-  changed: Voxel[];
+  changed: DeltaVoxel[];
 }
 
 export interface VoxelsResponse {
   sequence_id: number;
+  voxels: Voxel[];
+}
+
+export interface SnapshotResponse {
+  sequence_id: number;
+  structural_integrity: number;
   voxels: Voxel[];
 }
