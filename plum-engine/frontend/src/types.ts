@@ -35,3 +35,11 @@ export interface SnapshotResponse {
   structural_integrity: number;
   voxels: Voxel[];
 }
+
+export interface UploadDatasetResponse {
+  ok: boolean;
+  file_name: string;
+  format: string;
+  bytes_received: number;
+  message: string;
+}

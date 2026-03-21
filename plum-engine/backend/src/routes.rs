@@ -1,10 +1,10 @@
 use axum::{
-    extract::{Query, State},
+    extract::{Multipart, Query, State},
     http::StatusCode,
     Json,
 };
 use crate::{
-    models::{DeltaQuery, PingResponse, SnapshotResponse, VoxelsResponse},
+    models::{DeltaQuery, PingResponse, SnapshotResponse, UploadResponse, VoxelsResponse},
     state::AppState,
 };
 
@@ -60,4 +60,39 @@ pub async fn ingest_point_cloud(
     let vecs: Vec<glam::Vec3> = body.points.into_iter().map(|p| p.to_vec3()).collect();
     state.world.ingest_point_cloud(vecs);
     StatusCode::NO_CONTENT
+}
+
+/// POST /api/world/upload — Accept raw CSV, JSON, or LiDAR datasets for later processing.
+pub async fn upload_dataset(
+    State(_state): State<AppState>,
+    mut multipart: Multipart,
+) -> Result<Json<UploadResponse>, StatusCode> {
+    let mut file_name = String::new();
+    let mut format = "unknown".to_string();
+    let mut bytes_received = 0usize;
+
+    while let Some(field) = multipart.next_field().await.map_err(|_| StatusCode::BAD_REQUEST)? {
+        match field.name() {
+            Some("dataset") => {
+                file_name = field.file_name().unwrap_or("dataset-upload").to_string();
+                bytes_received = field.bytes().await.map_err(|_| StatusCode::BAD_REQUEST)?.len();
+            }
+            Some("format") => {
+                format = field.text().await.map_err(|_| StatusCode::BAD_REQUEST)?;
+            }
+            _ => {}
+        }
+    }
+
+    if bytes_received == 0 {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+
+    Ok(Json(UploadResponse {
+        ok: true,
+        file_name,
+        format,
+        bytes_received,
+        message: "Dataset received by backend. Processing pipeline can be attached next.".to_string(),
+    }))
 }

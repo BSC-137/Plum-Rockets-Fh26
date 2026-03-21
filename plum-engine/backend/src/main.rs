@@ -12,7 +12,7 @@ use std::net::SocketAddr;
 use tower_http::cors::CorsLayer;
 
 use crate::state::AppState;
-use crate::routes::{dev_tick, get_voxels, get_world_delta, ingest_point_cloud, ping, get_latest_history};
+use crate::routes::{dev_tick, get_latest_history, get_voxels, get_world_delta, ingest_point_cloud, ping, upload_dataset};
 
 #[tokio::main]
 async fn main() {
@@ -32,6 +32,7 @@ async fn main() {
         
         // Data ingestion & development
         .route("/api/world/ingest", post(ingest_point_cloud))
+        .route("/api/world/upload", post(upload_dataset))
         .route("/api/world/tick", post(dev_tick))
         
         // 3. Apply CORS and inject the state.
@@ -48,6 +49,7 @@ async fn main() {
     println!("- GET  /api/ping          (Health Check)");
     println!("- GET  /api/world/delta   (Sparse Updates)");
     println!("- POST /api/world/ingest  (LiDAR Stream)");
+    println!("- POST /api/world/upload  (Dataset Upload)");
 
     // 5. Fire up the server
     let listener = tokio::net::TcpListener::bind(addr).await.unwrap();

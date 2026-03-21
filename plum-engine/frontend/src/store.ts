@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import type { Voxel, VoxelsResponse } from './types';
+import type { UploadDatasetResponse, Voxel, VoxelsResponse } from './types';
 
 const API_BASE = 'http://localhost:3000/api';
 
@@ -36,11 +36,14 @@ interface WorldState {
   mode: ViewMode;
   tickOffset: number;
   structuralHealth: number;
+  uploadStatus: string;
+  uploadInFlight: boolean;
   syncWorld: () => Promise<void>;
   setMode: (mode: ViewMode) => void;
   setTickOffset: (tickOffset: number) => void;
   resetVolumetrics: () => Promise<void>;
   ingestLastData: () => Promise<void>;
+  uploadDataset: (file: File) => Promise<UploadDatasetResponse | null>;
 }
 
 export const useWorldStore = create<WorldState>((set, get) => ({
@@ -53,6 +56,8 @@ export const useWorldStore = create<WorldState>((set, get) => ({
   mode: 'LIVE',
   tickOffset: 0,
   structuralHealth: 1,
+  uploadStatus: 'AWAITING_DATASET',
+  uploadInFlight: false,
 
   async syncWorld() {
     try {
@@ -124,6 +129,40 @@ export const useWorldStore = create<WorldState>((set, get) => ({
       await syncWorld();
     } catch (error) {
       console.warn('Data ingest failed', error);
+    }
+  },
+
+  async uploadDataset(file) {
+    const formData = new FormData();
+    formData.append('dataset', file);
+    formData.append('format', file.name.split('.').pop()?.toLowerCase() ?? 'unknown');
+
+    set({
+      uploadInFlight: true,
+      uploadStatus: `UPLINKING_${file.name.toUpperCase()}`,
+    });
+
+    try {
+      const response = await fetch(`${API_BASE}/world/upload`, {
+        method: 'POST',
+        body: formData,
+      });
+
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+
+      const payload: UploadDatasetResponse = await response.json();
+      set({
+        uploadInFlight: false,
+        uploadStatus: `QUEUED_${payload.format.toUpperCase()}`,
+      });
+      return payload;
+    } catch (error) {
+      console.warn('Dataset upload failed', error);
+      set({
+        uploadInFlight: false,
+        uploadStatus: 'UPLOAD_FAULT',
+      });
+      return null;
     }
   },
 }));

@@ -1,4 +1,4 @@
-import { useEffect } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Canvas } from '@react-three/fiber';
 import { OrbitControls, PerspectiveCamera } from '@react-three/drei';
 import { motion } from 'framer-motion';
@@ -81,6 +81,76 @@ function SystemControls() {
         <div className="telemetry-row">
           <span>Signal</span>
           <strong>{formatSignalAge(metrics.LATEST_SIGNAL)}</strong>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function DatasetUploadPanel() {
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const uploadDataset = useWorldStore((state) => state.uploadDataset);
+  const uploadStatus = useWorldStore((state) => state.uploadStatus);
+  const uploadInFlight = useWorldStore((state) => state.uploadInFlight);
+  const [selectedFile, setSelectedFile] = useState<File | null>(null);
+
+  const acceptedTypes = '.csv,.json,.lidar,.las,.laz,text/csv,application/json';
+
+  const handleSelect = () => {
+    fileInputRef.current?.click();
+  };
+
+  const handleFileChange = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0] ?? null;
+    setSelectedFile(file);
+  };
+
+  const handleUpload = async () => {
+    if (!selectedFile || uploadInFlight) return;
+    await uploadDataset(selectedFile);
+  };
+
+  return (
+    <section className="engine-panel sidebar-panel upload-panel">
+      <div className="panel-caption">Data_Intake</div>
+
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept={acceptedTypes}
+        className="upload-input"
+        onChange={handleFileChange}
+        aria-label="Upload csv, json, or lidar dataset"
+      />
+
+      <div className="upload-dropzone" role="presentation" onClick={handleSelect}>
+        <span>Compatible_Input</span>
+        <strong>CSV / JSON / LIDAR</strong>
+        <small>{selectedFile ? selectedFile.name : 'SELECT_A_SOURCE_FILE'}</small>
+      </div>
+
+      <div className="upload-actions">
+        <button type="button" className="glass-button" onClick={handleSelect}>
+          {'> SELECT_DATASET'}
+        </button>
+        <button
+          type="button"
+          className="glass-button"
+          onClick={() => void handleUpload()}
+          disabled={!selectedFile || uploadInFlight}
+        >
+          {uploadInFlight ? '> TRANSMITTING' : '> SEND_TO_BACKEND'}
+        </button>
+      </div>
+
+      <div className="telemetry-block upload-telemetry">
+        <div className="telemetry-row">
+          <span>Queued_File</span>
+          <strong>{selectedFile?.name ?? 'NONE'}</strong>
+        </div>
+        <div className="telemetry-row">
+          <span>Transfer_Status</span>
+          <strong>{uploadStatus}</strong>
         </div>
       </div>
     </section>
@@ -225,6 +295,7 @@ export default function App() {
       <div className="ui-layer">
         <div className="left-rail">
           <SystemControls />
+          <DatasetUploadPanel />
         </div>
 
         <div className="top-band">

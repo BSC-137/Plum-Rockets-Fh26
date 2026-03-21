@@ -69,7 +69,9 @@ body {
   grid-row: 1 / span 2;
   grid-column: 1;
   display: flex;
+  flex-direction: column;
   align-items: flex-start;
+  gap: 1rem;
 }
 
 .top-band {
@@ -116,6 +118,72 @@ body {
     linear-gradient(180deg, rgba(255, 176, 142, 0.06), transparent 30%),
     linear-gradient(180deg, rgba(120, 40, 130, 0.15), transparent 55%),
     var(--panel-base);
+}
+
+.upload-panel {
+  width: min(320px, 100%);
+}
+
+.upload-input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.upload-dropzone {
+  margin-bottom: 0.85rem;
+  padding: 1rem;
+  border: 1px dashed rgba(255, 176, 142, 0.28);
+  border-radius: 4px;
+  background:
+    linear-gradient(180deg, rgba(255, 176, 142, 0.08), rgba(120, 40, 130, 0.08)),
+    rgba(15, 5, 20, 0.58);
+  cursor: pointer;
+  transition:
+    border-color 180ms ease,
+    box-shadow 180ms ease,
+    transform 180ms ease;
+}
+
+.upload-dropzone:hover {
+  transform: translateY(-1px);
+  border-color: rgba(255, 176, 142, 0.46);
+  box-shadow: 0 0 0 1px rgba(255, 176, 142, 0.08), 0 12px 24px rgba(255, 176, 142, 0.08);
+}
+
+.upload-dropzone span,
+.upload-dropzone strong,
+.upload-dropzone small {
+  display: block;
+}
+
+.upload-dropzone span,
+.upload-dropzone small {
+  color: rgba(255, 176, 142, 0.62);
+}
+
+.upload-dropzone strong {
+  margin: 0.45rem 0;
+  color: #ffe3d8;
+  font-size: 0.9rem;
+}
+
+.upload-dropzone small {
+  font-size: 0.62rem;
+  word-break: break-word;
+}
+
+.upload-actions .glass-button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+  transform: none;
+  box-shadow: none;
+}
+
+.upload-telemetry {
+  margin-top: 1rem;
 }
 
 .glass-button {

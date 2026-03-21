@@ -145,3 +145,12 @@ pub struct SnapshotResponse {
     pub structural_integrity: f64,
     pub voxels: Vec<Voxel>,
 }
+
+#[derive(Debug, Clone, Serialize)]
+pub struct UploadResponse {
+    pub ok: bool,
+    pub file_name: String,
+    pub format: String,
+    pub bytes_received: usize,
+    pub message: String,
+}
