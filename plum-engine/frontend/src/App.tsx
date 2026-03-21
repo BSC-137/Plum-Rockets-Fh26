@@ -106,17 +106,20 @@ function formatTimecode(timestamp: number | null) {
   });
 }
 
-function IntegrityGauge({ integrity }: { integrity: number }) {
+
+function IntegrityGauge({ integrity }) {
   const radius = 52;
   const circumference = 2 * Math.PI * radius;
   const clampedIntegrity = Math.max(0, Math.min(1, integrity));
   const dashOffset = circumference * (1 - clampedIntegrity);
 
   return (
-    <section className="engine-panel integrity-panel">
+    <section className="engine-panel integrity-panel" style={{ display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
       <div className="panel-caption">Integrity</div>
-      <div className="ring-shell">
-        <svg className="integrity-ring" viewBox="0 0 140 140" aria-label="World structural health">
+      
+      
+      <div className="ring-shell" style={{ position: 'relative', width: '140px', height: '140px', display: 'grid', placeItems: 'center' }}>
+        <svg width="140" height="140" viewBox="0 0 140 140" style={{ transform: 'rotate(-90deg)' }}>
           <circle cx="70" cy="70" r={radius} className="ring-track" />
           <circle
             cx="70"
@@ -125,12 +128,28 @@ function IntegrityGauge({ integrity }: { integrity: number }) {
             className="ring-progress"
             strokeDasharray={circumference}
             strokeDashoffset={dashOffset}
-            transform="rotate(-90 70 70)"
           />
         </svg>
-        <div className="ring-center">
-          <span>{Math.round(clampedIntegrity * 100)}%</span>
-          <small>WORLD_HEALTH</small>
+        
+        
+        <div className="ring-center" style={{
+          position: 'absolute',
+          top: '50%',
+          left: '50%',
+          transform: 'translate(-50%, -50%)', 
+          display: 'flex',
+          flexDirection: 'column',
+          alignItems: 'center',
+          textAlign: 'center',
+          pointerEvents: 'none', 
+        }}>
+        
+          <span style={{ fontSize: '1.4rem', fontWeight: '700', color: '#ffe7dc', lineHeight: '1.1' }}>
+            {Math.round(clampedIntegrity * 100)}%
+          </span>
+          <small style={{ fontSize: '0.55rem', color: 'rgba(255, 176, 142, 0.62)', marginTop: '4px', whiteSpace: 'nowrap' }}>
+            WORLD_HEALTH
+          </small>
         </div>
       </div>
     </section>
@@ -142,12 +161,14 @@ function SystemControls() {
   const ingestLastData = useWorldStore((state) => state.ingestLastData);
   const toggleReport = useWorldStore((state) => state.toggleReport);
   const metrics = useWorldStore((state) => state.metrics);
+  
 
   return (
     <section className="engine-panel sidebar-panel">
       <div className="panel-caption">System_Controls</div>
+      
       <button type="button" className="glass-button" onClick={() => void resetVolumetrics()}>
-        {'> RESET_VOLUMETRICS'}
+        {'> RESET_VOXELS'}
       </button>
       <button type="button" className="glass-button" onClick={() => void ingestLastData()}>
         {'> INGEST_LAST_DATA'}
@@ -284,7 +305,7 @@ function DatasetUploadPanel() {
 
       <div className="upload-actions">
         <button type="button" className="glass-button" onClick={handleSelect}>
-          {'> SELECT_DATASET'}
+          {'> BROWSE'}
         </button>
         <button
           type="button"
@@ -292,7 +313,7 @@ function DatasetUploadPanel() {
           onClick={() => void handleUpload()}
           disabled={!selectedFile || isUploading}
         >
-          {isUploading ? '> STREAMING...' : '> SEND_TO_BACKEND'}
+          {isUploading ? '> STREAMING...' : '> UPLOAD'}
         </button>
       </div>
 
@@ -387,7 +408,7 @@ function TemporalScrubber() {
       transition={{ duration: 0.24, ease: 'easeOut' }}
     >
       <div className="scrubber-header">
-        <span>[ TEMPORAL_RECALL_BUFFER_32_TICKS ]</span>
+        <span>TEMPORAL_RECALL_BUFFER_32_TICKS</span>
         <motion.strong
           className={`live-pill ${mode === 'LIVE' ? 'active' : ''}`}
           initial={false}
