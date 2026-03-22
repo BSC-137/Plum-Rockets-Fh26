@@ -23,7 +23,6 @@ const INSIGHT_MESSAGES = [
 ];
 
 const wait = (ms: number) => new Promise<void>((resolve) => window.setTimeout(resolve, ms));
-
 function isFinitePoint(point: Point3) {
   return Number.isFinite(point.x) && Number.isFinite(point.y) && Number.isFinite(point.z);
 }
@@ -121,13 +120,15 @@ function IntegrityGauge({ integrity }) {
       <div className="ring-shell" style={{ position: 'relative', width: '140px', height: '140px', display: 'grid', placeItems: 'center' }}>
         <svg width="140" height="140" viewBox="0 0 140 140" style={{ transform: 'rotate(-90deg)' }}>
           <circle cx="70" cy="70" r={radius} className="ring-track" />
-          <circle
+          <motion.circle
             cx="70"
             cy="70"
             r={radius}
             className="ring-progress"
             strokeDasharray={circumference}
-            strokeDashoffset={dashOffset}
+            initial={false}
+            animate={{ strokeDashoffset: dashOffset }}
+            transition={{ duration: 0.35, ease: 'easeOut' }}
           />
         </svg>
         
@@ -144,9 +145,14 @@ function IntegrityGauge({ integrity }) {
           pointerEvents: 'none', 
         }}>
         
-          <span style={{ fontSize: '1.4rem', fontWeight: '700', color: '#ffe7dc', lineHeight: '1.1' }}>
+          <motion.span
+            initial={false}
+            animate={{ opacity: 1, scale: 1 }}
+            transition={{ duration: 0.2, ease: 'easeOut' }}
+            style={{ fontSize: '1.4rem', fontWeight: '700', color: '#ffe7dc', lineHeight: '1.1' }}
+          >
             {Math.round(clampedIntegrity * 100)}%
-          </span>
+          </motion.span>
           <small style={{ fontSize: '0.55rem', color: 'rgba(255, 176, 142, 0.62)', marginTop: '4px', whiteSpace: 'nowrap' }}>
             WORLD_HEALTH
           </small>
@@ -466,7 +472,7 @@ export default function App() {
           <pointLight position={[-6, 5, -4]} intensity={12} color="#703060" distance={20} decay={2} />
           <pointLight position={[6, 4, 8]} intensity={9} color="#FFB08E" distance={20} decay={2} />
           <VoxelEngine />
-          <OrbitControls enableDamping dampingFactor={0.08} minDistance={7} maxDistance={18} target={[1, 1, 0]} />
+          <OrbitControls makeDefault enableDamping dampingFactor={0.05} minDistance={5} maxDistance={500} />
         </Canvas>
       </div>
 

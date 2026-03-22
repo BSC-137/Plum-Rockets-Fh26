@@ -10,7 +10,7 @@ export interface Voxel {
 }
 
 export interface DeltaVoxel {
-  key: string;
+  key: number;
   x: number;
   y: number;
   z: number;
